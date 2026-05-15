@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>阅读尺</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="header">
+        <div>
+          <h1>阅读尺</h1>
+          <p>让页面只突出当前阅读区域</p>
+        </div>
+      </header>
+
+      <label class="switch-row">
+        <span>
+          <strong>启用阅读尺</strong>
+          <small>上下遮罩，中间透明</small>
+        </span>
+        <input id="enabled" type="checkbox" />
+      </label>
+
+      <label class="slider-row" for="height">
+        <span>
+          <strong>阅读区域高度</strong>
+          <small><span id="heightValue">120</span>px</small>
+        </span>
+        <input id="height" type="range" min="40" max="320" step="1" />
+      </label>
+
+      <label class="slider-row" for="width">
+        <span>
+          <strong>阅读区域宽度</strong>
+          <small><span id="widthValue">960</span>px</small>
+        </span>
+        <input id="width" type="range" min="240" max="1600" step="1" />
+      </label>
+
+      <p id="status" class="status" role="status"></p>
+    </main>
+
+    <script src="rulerSettings.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
