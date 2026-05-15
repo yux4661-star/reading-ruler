@@ -22,6 +22,7 @@ function createElementMock(tagName, ownerDocument) {
     attributes: {},
     children: [],
     parentNode: null,
+    _listeners: Object.create(null),
     setAttribute(name, value) {
       this.attributes[name] = value;
     },
@@ -40,6 +41,22 @@ function createElementMock(tagName, ownerDocument) {
         (child) => child !== this,
       );
       this.parentNode = null;
+    },
+    addEventListener(type, listener) {
+      if (!this._listeners[type]) {
+        this._listeners[type] = [];
+      }
+      this._listeners[type].push(listener);
+    },
+    dispatchEvent(event) {
+      const type = typeof event === "string" ? event : event.type;
+      const listeners = this._listeners[type] ?? [];
+      const payload =
+        typeof event === "string"
+          ? { type, preventDefault() {}, stopPropagation() {} }
+          : event;
+
+      return Promise.all(listeners.map((listener) => listener(payload)));
     },
     querySelector(selector) {
       const match = selector.match(/^\[data-ruler-part="([^"]+)"\]$/);
@@ -108,8 +125,16 @@ function createContentScriptHarness(initialSettings = {}) {
   const document = createDocumentMock();
   const messageListeners = [];
   const chromeStorageListeners = [];
-  const windowEventListeners = { popstate: [], hashchange: [] };
+  const windowEventListeners = {
+    popstate: [],
+    hashchange: [],
+    mousemove: [],
+    mouseup: [],
+    resize: [],
+    keydown: [],
+  };
   let storageGetKeys;
+  const sessionSetCalls = [];
   const localSnapshot =
     initialSettings &&
     typeof initialSettings === "object" &&
@@ -141,14 +166,33 @@ function createContentScriptHarness(initialSettings = {}) {
         navigationHref.value = `${navigationHref.value}/replaced`;
       },
     },
+    innerWidth: 800,
+    innerHeight: 600,
+    requestAnimationFrame(callback) {
+      queueMicrotask(() => callback());
+      return 1;
+    },
+    cancelAnimationFrame() {},
     addEventListener(type, listener) {
-      if (type === "popstate" || type === "hashchange") {
+      if (Object.prototype.hasOwnProperty.call(windowEventListeners, type)) {
         windowEventListeners[type].push(listener);
+      }
+    },
+    removeEventListener(type, listener) {
+      const listeners = windowEventListeners[type];
+      if (!listeners) {
+        return;
+      }
+      const index = listeners.indexOf(listener);
+      if (index !== -1) {
+        listeners.splice(index, 1);
       }
     },
     RulerSettings: {
       normalizeSettings,
       getOverlayGeometry,
+      clampWidth,
+      clampHeight,
     },
     chrome: {
       storage: {
@@ -157,15 +201,29 @@ function createContentScriptHarness(initialSettings = {}) {
             storageGetKeys = keys;
             callback(pickRequestedKeys(syncSnapshot, keys));
           },
+          set(items, callback) {
+            Object.assign(syncSnapshot, items);
+            callback?.();
+          },
         },
         local: {
           get(keys, callback) {
             callback(pickRequestedKeys(localSnapshot, keys));
           },
+          set(items, callback) {
+            Object.assign(localSnapshot, items);
+            callback?.();
+          },
         },
         onChanged: {
           addListener(listener) {
             chromeStorageListeners.push(listener);
+          },
+        },
+        session: {
+          set(items, callback) {
+            sessionSetCalls.push(items);
+            callback?.();
           },
         },
       },
@@ -180,6 +238,8 @@ function createContentScriptHarness(initialSettings = {}) {
   };
 
   vm.createContext(sandbox);
+  sandbox.setTimeout = nodeTimers.setTimeout;
+  sandbox.clearTimeout = nodeTimers.clearTimeout;
 
   return {
     document,
@@ -200,9 +260,35 @@ function createContentScriptHarness(initialSettings = {}) {
     get storageGetKeys() {
       return storageGetKeys;
     },
+    get sessionSetCalls() {
+      return sessionSetCalls;
+    },
     dispatchPopState() {
       for (const listener of windowEventListeners.popstate) {
         listener();
+      }
+    },
+    dispatchMouseMove(clientX, clientY) {
+      const event = { clientX, clientY, preventDefault() {}, stopPropagation() {} };
+      for (const listener of windowEventListeners.mousemove) {
+        listener(event);
+      }
+    },
+    dispatchMouseUp() {
+      const event = { preventDefault() {}, stopPropagation() {} };
+      for (const listener of windowEventListeners.mouseup) {
+        listener(event);
+      }
+    },
+    dispatchResize() {
+      for (const listener of windowEventListeners.resize) {
+        listener();
+      }
+    },
+    dispatchKeyDown(key, code = key) {
+      const event = { key, code, preventDefault() {}, stopPropagation() {} };
+      for (const listener of windowEventListeners.keydown) {
+        listener(event);
       }
     },
   };
@@ -327,6 +413,11 @@ function createPopupHarness(storedSettings = {}, tab = { id: 12 }, options = {})
             }
           },
         },
+        session: {
+          onChanged: {
+            addListener() {},
+          },
+        },
       },
       tabs: {
         async query(queryInfo) {
@@ -342,6 +433,9 @@ function createPopupHarness(storedSettings = {}, tab = { id: 12 }, options = {})
             await options.sendMessage(tabId, message);
           }
           sentMessages.push({ tabId, message });
+          if (message?.type === "READING_RULER_QUERY_STATE") {
+            return options.queryStateResponse ?? { enabled: false };
+          }
         },
       },
     },
@@ -472,21 +566,26 @@ test("content script keeps stored size but defaults to disabled on load", () => 
   );
 
   const [topMask, middleRow, bottomMask] = root.children;
-  const [leftMask, readingStrip, rightMask] = middleRow.children;
+  const [leftMask, readingWrap, rightMask] = middleRow.children;
+  const readingStrip = readingWrap.children[0];
 
   assert.equal(topMask.style.background, "rgba(0, 0, 0, 0.42)");
-  assert.equal(topMask.style.height, "calc((100vh - 120px) / 2)");
+  assert.equal(topMask.style.height, "240px");
   assert.equal(leftMask.style.background, "rgba(0, 0, 0, 0.42)");
+  assert.equal(leftMask.style.flex, "0 0 0px");
+  assert.equal(readingWrap.style.width, "800px");
+  assert.equal(readingWrap.style.height, "120px");
   assert.equal(readingStrip.style.background, "transparent");
-  assert.equal(readingStrip.style.height, "120px");
-  assert.equal(readingStrip.style.width, "min(960px, 100vw)");
+  assert.equal(readingStrip.style.height, "100%");
+  assert.equal(readingStrip.style.width, "100%");
   assert.equal(rightMask.style.background, "rgba(0, 0, 0, 0.42)");
   assert.equal(
     readingStrip.style.boxShadow,
     "inset 0 1px rgba(255,255,255,0.24), inset 0 -1px rgba(255,255,255,0.24)",
   );
   assert.equal(bottomMask.style.background, "rgba(0, 0, 0, 0.42)");
-  assert.equal(bottomMask.style.height, "calc((100vh - 120px) / 2)");
+  assert.equal(bottomMask.style.height, "240px");
+  assert.equal(readingWrap.children.length, 10);
 });
 
 test("content script updates and removes the overlay from runtime messages", () => {
@@ -506,11 +605,15 @@ test("content script updates and removes the overlay from runtime messages", () 
   const root = document.getElementById("reading-ruler-extension-overlay");
 
   assert.equal(document.documentElement.children.length, 1);
-  assert.equal(root.children[0].style.height, "calc((100vh - 180px) / 2)");
+  assert.equal(root.children[0].style.height, "210px");
   assert.equal(root.children[1].style.height, "180px");
-  assert.equal(root.children[1].children[1].style.height, "180px");
-  assert.equal(root.children[1].children[1].style.width, "min(800px, 100vw)");
-  assert.equal(root.children[2].style.height, "calc((100vh - 180px) / 2)");
+  const readingWrap180 = root.children[1].children[1];
+  const readingStrip180 = readingWrap180.children[0];
+  assert.equal(readingWrap180.style.height, "180px");
+  assert.equal(readingWrap180.style.width, "800px");
+  assert.equal(readingStrip180.style.height, "100%");
+  assert.equal(readingStrip180.style.width, "100%");
+  assert.equal(root.children[2].style.height, "210px");
 
   messageListener({
     type: "READING_RULER_SETTINGS_UPDATED",
@@ -519,8 +622,12 @@ test("content script updates and removes the overlay from runtime messages", () 
 
   assert.equal(document.documentElement.children.length, 1);
   assert.equal(root.children[1].style.height, "320px");
-  assert.equal(root.children[1].children[1].style.height, "320px");
-  assert.equal(root.children[1].children[1].style.width, "min(1200px, 100vw)");
+  const readingWrap320 = root.children[1].children[1];
+  const readingStrip320 = readingWrap320.children[0];
+  assert.equal(readingWrap320.style.height, "320px");
+  assert.equal(readingWrap320.style.width, "800px");
+  assert.equal(readingStrip320.style.height, "100%");
+  assert.equal(readingStrip320.style.width, "100%");
 
   messageListener({
     type: "READING_RULER_SETTINGS_UPDATED",
@@ -565,7 +672,8 @@ test("content script keeps enabled state when storage emits partial updates", ()
 
   const rootAfterWidthChange = document.getElementById("reading-ruler-extension-overlay");
   assert.notEqual(rootAfterWidthChange, null);
-  assert.equal(rootAfterWidthChange.children[1].children[1].style.width, "min(700px, 100vw)");
+  const wrap700 = rootAfterWidthChange.children[1].children[1];
+  assert.equal(wrap700.style.width, "700px");
 
   storageChangeListener(
     {
@@ -577,7 +685,7 @@ test("content script keeps enabled state when storage emits partial updates", ()
   const rootAfterHeightChange = document.getElementById("reading-ruler-extension-overlay");
   assert.notEqual(rootAfterHeightChange, null);
   assert.equal(rootAfterHeightChange.children[1].children[1].style.height, "180px");
-  assert.equal(rootAfterHeightChange.children[1].children[1].style.width, "min(700px, 100vw)");
+  assert.equal(rootAfterHeightChange.children[1].children[1].style.width, "700px");
 });
 
 test("content script replaces conflicting same-id page elements", () => {
@@ -607,8 +715,122 @@ test("content script replaces conflicting same-id page elements", () => {
     ["top", "middle-row", "bottom"],
   );
   assert.equal(root.children[1].style.height, "140px");
-  assert.equal(root.children[1].children[1].style.height, "140px");
-  assert.equal(root.children[1].children[1].style.width, "min(700px, 100vw)");
+  const readingWrap = root.children[1].children[1];
+  assert.equal(readingWrap.style.height, "140px");
+  assert.equal(readingWrap.style.width, "700px");
+});
+
+test("content script moves the strip when dragging the move grip", async () => {
+  const harness = runContentScript({
+    enabled: false,
+    height: 120,
+    width: 400,
+  });
+
+  harness.messageListener({
+    type: "READING_RULER_SETTINGS_UPDATED",
+    settings: { enabled: true, height: 120, width: 400 },
+  });
+
+  const root = harness.document.getElementById("reading-ruler-extension-overlay");
+  const readingWrap = root.children[1].children[1];
+  const moveGrip = readingWrap.children.find(
+    (node) => node.dataset?.rulerPart === "move-grip",
+  );
+
+  assert.notEqual(moveGrip, undefined);
+
+  const leftMask = root.children[1].children[0];
+
+  assert.equal(leftMask.style.flex, "0 0 200px");
+
+  await moveGrip.dispatchEvent({
+    type: "mousedown",
+    clientX: 400,
+    clientY: 300,
+    preventDefault() {},
+    stopPropagation() {},
+    currentTarget: moveGrip,
+  });
+
+  harness.dispatchMouseMove(600, 260);
+  await flushAsyncWork();
+
+  assert.equal(leftMask.style.flex, "0 0 400px");
+
+  harness.dispatchMouseUp();
+  await flushAsyncWork();
+});
+
+test("content script closes the overlay when Escape is pressed", async () => {
+  const harness = runContentScript({
+    enabled: false,
+    height: 120,
+    width: 400,
+  });
+
+  harness.messageListener({
+    type: "READING_RULER_SETTINGS_UPDATED",
+    settings: { enabled: true, height: 120, width: 400 },
+  });
+
+  assert.notEqual(
+    harness.document.getElementById("reading-ruler-extension-overlay"),
+    null,
+  );
+
+  harness.dispatchKeyDown("Escape", "Escape");
+  await flushAsyncWork();
+
+  assert.equal(
+    harness.document.getElementById("reading-ruler-extension-overlay"),
+    null,
+  );
+  assert.equal(harness.sessionSetCalls.length, 1);
+  assert.ok(
+    Object.prototype.hasOwnProperty.call(
+      harness.sessionSetCalls[0],
+      "readingRulerEscDismissed",
+    ),
+  );
+});
+
+test("content script resizes from southeast handle", async () => {
+  const harness = runContentScript({
+    enabled: false,
+    height: 120,
+    width: 400,
+  });
+
+  harness.messageListener({
+    type: "READING_RULER_SETTINGS_UPDATED",
+    settings: { enabled: true, height: 120, width: 400 },
+  });
+
+  const root = harness.document.getElementById("reading-ruler-extension-overlay");
+  const readingWrap = root.children[1].children[1];
+  const seHandle = readingWrap.children.find(
+    (node) => node.dataset?.rulerHandle === "se",
+  );
+
+  assert.notEqual(seHandle, undefined);
+
+  await seHandle.dispatchEvent({
+    type: "mousedown",
+    clientX: 400,
+    clientY: 300,
+    preventDefault() {},
+    stopPropagation() {},
+    currentTarget: seHandle,
+  });
+
+  harness.dispatchMouseMove(480, 380);
+  await flushAsyncWork();
+  harness.dispatchMouseUp();
+  await flushAsyncWork();
+
+  assert.equal(readingWrap.style.width, "480px");
+  assert.equal(readingWrap.style.height, "200px");
 });
 
 test("content script initializes only once in the same page context", () => {
@@ -662,7 +884,35 @@ test("content script disables ruler when SPA history changes URL", () => {
   );
 });
 
-test("popup renders stored settings and stays disabled on open", async () => {
+test("content script responds to query state with current enabled flag", () => {
+  const harness = createContentScriptHarness({
+    height: 120,
+    width: 960,
+  });
+
+  harness.run();
+  const listener = harness.messageListener;
+  assert.equal(typeof listener, "function");
+
+  let reply;
+  listener({ type: "READING_RULER_QUERY_STATE" }, {}, (r) => {
+    reply = r;
+  });
+  assert.equal(reply?.enabled, false);
+
+  listener({
+    type: "READING_RULER_SETTINGS_UPDATED",
+    settings: { enabled: true, height: 120, width: 960 },
+  });
+
+  reply = undefined;
+  listener({ type: "READING_RULER_QUERY_STATE" }, {}, (r) => {
+    reply = r;
+  });
+  assert.equal(reply?.enabled, true);
+});
+
+test("popup renders stored settings and queries tab for enabled on open", async () => {
   const harness = createPopupHarness({ enabled: true, height: 180, width: 860 });
 
   await flushAsyncWork();
@@ -678,8 +928,32 @@ test("popup renders stored settings and stays disabled on open", async () => {
   assert.equal(harness.elements.width.max, "1600");
   assert.equal(harness.elements.width.value, "860");
   assert.equal(harness.elements.widthValue.textContent, "860");
-  assert.deepEqual(toPlainJson(harness.sentMessages), []);
+  assert.deepEqual(toPlainJson(harness.sentMessages), [
+    {
+      tabId: 12,
+      message: { type: "READING_RULER_QUERY_STATE" },
+    },
+  ]);
   assert.equal(harness.elements.status.textContent, "请手动开启阅读尺。");
+});
+
+test("popup reflects enabled state when content script reports ruler on", async () => {
+  const harness = createPopupHarness(
+    { enabled: false, height: 120, width: 960 },
+    { id: 12 },
+    { queryStateResponse: { enabled: true } },
+  );
+
+  await flushAsyncWork();
+
+  assert.equal(harness.elements.enabled.checked, true);
+  assert.deepEqual(toPlainJson(harness.sentMessages), [
+    {
+      tabId: 12,
+      message: { type: "READING_RULER_QUERY_STATE" },
+    },
+  ]);
+  assert.equal(harness.elements.status.textContent, "阅读尺已在当前页面开启。");
 });
 
 test("popup shows saved status when there is no active tab", async () => {

@@ -2,6 +2,9 @@
   "use strict";
 
   const MESSAGE_TYPE = "READING_RULER_SETTINGS_UPDATED";
+  const QUERY_STATE_MESSAGE_TYPE = "READING_RULER_QUERY_STATE";
+  /** Session pulse from content script when the user presses Esc on the page. */
+  const SESSION_ESC_KEY = "readingRulerEscDismissed";
   /** Debounce sync writes — rapid drags hit chrome.storage.sync rate limits. */
   const DIMENSION_PERSIST_DEBOUNCE_MS = 450;
   const {
@@ -184,6 +187,32 @@
     });
   }
 
+  function sendTabMessageForResponse(tabId, message) {
+    try {
+      const maybePromise = chrome.tabs.sendMessage(tabId, message);
+      if (isPromiseLike(maybePromise)) {
+        return maybePromise;
+      }
+    } catch {
+      // Fallback to callback style.
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.tabs.sendMessage(tabId, message, (response) => {
+          const runtimeError = chrome.runtime?.lastError;
+          if (runtimeError) {
+            reject(new Error(runtimeError.message));
+            return;
+          }
+          resolve(response);
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
   function setStatus(message, requestId) {
     if (requestId !== undefined && requestId !== latestRequestId) {
       return;
@@ -235,6 +264,24 @@
     });
     const [tab] = Array.isArray(tabs) ? tabs : [];
     return tab;
+  }
+
+  async function readEnabledFromActiveTab() {
+    try {
+      const tab = await getActiveTab();
+      if (!tab?.id) {
+        return null;
+      }
+      const response = await sendTabMessageForResponse(tab.id, {
+        type: QUERY_STATE_MESSAGE_TYPE,
+      });
+      if (response && typeof response.enabled === "boolean") {
+        return response.enabled;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   async function notifyActiveTab(settings, requestId) {
@@ -324,11 +371,45 @@
         width: storedLocal.width ?? storedSync.width,
       });
       render(settings);
-      setStatus("请手动开启阅读尺。", requestId);
+
+      const enabledOnPage = await readEnabledFromActiveTab();
+      const displaySettings = normalizeSettings({
+        ...settings,
+        ...(enabledOnPage === null ? {} : { enabled: enabledOnPage }),
+      });
+      render(displaySettings);
+
+      if (enabledOnPage === true) {
+        setStatus("阅读尺已在当前页面开启。", requestId);
+      } else {
+        setStatus("请手动开启阅读尺。", requestId);
+      }
     } catch {
       setStatus(API_ERROR_STATUS, requestId);
     }
   }
+
+  function attachSessionEscSync() {
+    const sessionApi = chrome.storage?.session;
+    if (!sessionApi?.onChanged?.addListener) {
+      return;
+    }
+
+    sessionApi.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "session") {
+        return;
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(changes, SESSION_ESC_KEY)) {
+        return;
+      }
+
+      enabledInput.checked = false;
+      setStatus("页面已按 Esc 关闭阅读尺。");
+    });
+  }
+
+  attachSessionEscSync();
 
   Promise.all([
     storageGet(["height", "width"]).catch(() => ({})),
