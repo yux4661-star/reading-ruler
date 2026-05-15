@@ -18,6 +18,11 @@ A minimal Chrome extension that dims the page above and below a centered transpa
 4. Select this project folder.
 5. Open a normal webpage and click the Reading Ruler extension icon.
 
+## Install from GitHub
+
+1. Clone this repository (`git clone <repo-url>`) or download the repository as a ZIP and extract it.
+2. Follow **Install Locally** above; in step 4, choose the cloned or extracted folder.
+
 ## Test
 
 Run:
