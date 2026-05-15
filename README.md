@@ -33,11 +33,11 @@ Run:
 npm test
 ```
 
-The tests cover settings normalization, overlay behavior, and popup messaging.
+The tests cover settings normalization, overlay behavior, popup messaging, and opening-popup state sync with the active tab.
 
 ## Manual Verification
 
-- The popup opens from the extension icon; it loads with the ruler **off** until you enable it (saved `enabled` is not applied on open by design).
+- The popup opens from the extension icon; **`enabled` is not stored** in Chrome storage — when the extension can talk to the active tab, the enable switch **reflects whether the ruler is already showing** on that page; otherwise it stays off until you enable it.
 - The enable switch toggles the overlay on the active page.
 - The height and width sliders change the transparent reading strip immediately.
 - With the ruler on, **drag the transparent reading area** to move the strip; drag **handles** to resize.

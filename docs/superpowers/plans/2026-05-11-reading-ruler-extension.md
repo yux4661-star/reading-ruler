@@ -1,6 +1,6 @@
 # Reading Ruler Extension Implementation Plan
 
-> **2026-05-13 sync:** This file is a historical step-by-step plan with embedded snapshots of early code. The **current behavior** (including `width`, `storage.local` fallback for dimensions, and SPA navigation disabling the overlay) lives in `src/` and `README.md`. Treat the checklist/procedures below as **archive**, not a live spec.
+> **2026-05-13 sync:** This file is a historical step-by-step plan with embedded snapshots of early code. The **current behavior** (including `width`, `storage.local` fallback for dimensions, SPA navigation clearing the overlay, interactive overlay controls, and popup tab state query) lives in `src/`, `AGENTS.md`, and `README.md`. Treat the checklist/procedures below as **archive**, not a live spec.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -25,7 +25,7 @@
 - Create `src/background.js`: minimal MV3 service worker.
 - Create `README.md`: local installation and verification instructions.
 
-This workspace is currently not a git repository, so commit steps are intentionally omitted. If git is initialized later, commit after each task with the files listed in that task.
+The repository is under git; treat the task checklist below as **historical**. Commit after logical chunks of work as you prefer.
 
 ---
 

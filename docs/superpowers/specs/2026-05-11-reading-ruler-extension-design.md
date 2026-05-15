@@ -1,5 +1,7 @@
 # Reading Ruler Chrome Extension Design
 
+> **Archive (2026-05-11):** Snapshot of the first design. The shipped extension adds drag-to-move, resize handles, **Esc** to dismiss (with popup sync via `chrome.storage.session`), debounced persist from the overlay, and **`READING_RULER_QUERY_STATE`** so the popup checkbox can reflect the tab. Authoritative behavior: `src/`, `AGENTS.md`, and `README.md`.
+
 ## Goal
 
 Build a minimal Chrome extension that helps with web reading by dimming the page above and below a transparent horizontal reading area. The first version focuses on a stable, easy-to-load extension with a simple popup for turning the ruler on or off and adjusting the reading area's height.
